@@ -134,13 +134,12 @@
     let exportEndDate = getLocalDateYYYYMMDD();
 
     // STATE CONFIG & KALENDER
-    let schoolConfig = { hari_masuk: 5 }; 
-    let liburList = []; 
+    let schoolConfig = { hari_sekolah: 5 }; 
     let dateValidationState = { isValid: true, message: '' };
 
     const app = document.getElementById("app");
 
-    // --- SESSION MANAGEMENT (PERBAIKAN UTAMA) ---
+    // --- SESSION MANAGEMENT ---
     const SESSION_KEY = 'gurwal_session_v1';
 
     function saveSession(guruData, demoMode = false) {
@@ -324,35 +323,54 @@
     // --- LOGIKA VALIDASI TANGGAL ---
     async function loadConfigData() {
       if (isDemoMode) {
-        schoolConfig = { hari_masuk: 5 };
-        liburList = [{ tanggal: '2025-12-25', keterangan: 'Libur Demo' }];
+        schoolConfig = { hari_sekolah: 5 };
         return;
       }
       try {
-        const { data: sekolahData } = await supabase.from('sekolah').select('hari_masuk').maybeSingle();
-        if (sekolahData) schoolConfig.hari_masuk = sekolahData.hari_masuk || 5;
-        const { data: kalenderData } = await supabase
-          .from('kalender_pendidikan').select('tanggal, keterangan').eq('is_libur', true);
-        if (kalenderData) liburList = kalenderData;
+        const { data: sekolahData } = await supabase.from('sekolah').select('hari_sekolah').limit(1).maybeSingle();
+        if (sekolahData) schoolConfig.hari_sekolah = sekolahData.hari_sekolah || 5;
       } catch (err) {
-        console.error("Gagal load config:", err);
+        console.error("Gagal load config sekolah:", err);
       }
     }
 
-    function checkDateValidity(dateStr) {
+    // Cek validitas tanggal (Async - Cek Database Kalender)
+    async function validateDateAsync(dateStr) {
       const todayStr = getLocalDateYYYYMMDD();
-      const d = new Date(dateStr);
-      const localDateObj = new Date(dateStr + 'T00:00:00');
-      const dayIndex = localDateObj.getDay(); 
+      const localDateObj = new Date(dateStr);
+      const dayIndex = localDateObj.getDay(); // 0=Minggu, 6=Sabtu
 
-      if (dateStr > todayStr) return { isValid: false, message: "❌ Tidak dapat input tanggal masa depan." };
-      if (schoolConfig.hari_masuk === 5) {
-        if (dayIndex === 0 || dayIndex === 6) return { isValid: false, message: "⛔ Sekolah Libur (Akhir Pekan)." };
-      } else {
-        if (dayIndex === 0) return { isValid: false, message: "⛔ Sekolah Libur (Hari Minggu)." };
+      // 1. Masa Depan
+      if (dateStr > todayStr) {
+          return { isValid: false, message: "❌ Tanggal Masa Depan (Belum dapat diisi)." };
       }
-      const hariLibur = liburList.find(l => l.tanggal === dateStr);
-      if (hariLibur) return { isValid: false, message: `🏖️ Libur: ${hariLibur.keterangan}` };
+
+      // 2. Hari Libur Rutin (Weekend)
+      if (dayIndex === 0) {
+          return { isValid: false, message: "⛔ Hari Minggu (Libur)." };
+      }
+      if (schoolConfig.hari_sekolah === 5 && dayIndex === 6) {
+          return { isValid: false, message: "⛔ Hari Sabtu (Sekolah 5 Hari Kerja)." };
+      }
+
+      // 3. Cek Kalender Pendidikan di Database
+      if (!isDemoMode) {
+          try {
+              const { data: libur } = await supabase
+                  .from('kalender_pendidikan')
+                  .select('jenis, keterangan')
+                  .eq('tanggal', dateStr)
+                  .maybeSingle();
+
+              if (libur) {
+                  const label = libur.jenis.replace(/_/g, ' ');
+                  return { isValid: false, message: `🏖️ ${label}: ${libur.keterangan || ''}` };
+              }
+          } catch (err) {
+              console.error("Error check holiday", err);
+          }
+      }
+
       return { isValid: true, message: "" };
     }
 
@@ -637,8 +655,10 @@
     }
 
     async function loadSiswaList() {
-      dateValidationState = checkDateValidity(tanggalDipilih);
+      // VALIDASI TANGGAL ASYNC
+      dateValidationState = await validateDateAsync(tanggalDipilih);
       const isLocked = !dateValidationState.isValid;
+      
       const alertBox = document.getElementById('dateAlertBox');
       const btnSimpan = document.getElementById('btnSimpan');
       const btnHapus = document.getElementById('btnHapus');
@@ -895,14 +915,5 @@
 
     checkSession();
   </script>
-  <script>
-  if ("serviceWorker" in navigator) {
-    window.addEventListener("load", () => {
-      navigator.serviceWorker.register("/sw.js")
-        .then(reg => console.log("SW registered"))
-        .catch(err => console.log("SW failed", err));
-    });
-  }
-</script>
 </body>
 </html>
