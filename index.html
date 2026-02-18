@@ -384,14 +384,25 @@
                 { tanggal: exportEndDate, nama: 'Budi Santoso', nisn: '456', kelas: 'XA', status: 'HADIR' },
             ];
         }
+
+        // --- UPDATE: Filter by ID SISWA (Bukan ID Guru) ---
+        // Ini memastikan histori terbaca walaupun siswa pindah wali
+        if (!siswaBinaan || siswaBinaan.length === 0) {
+             siswaBinaan = await fetchSiswaBinaan(); // Fallback fetch
+        }
+        const siswaIds = siswaBinaan.map(s => s.id);
+
+        if(siswaIds.length === 0) return [];
+
         const { data, error } = await supabase
             .from('kehadiran')
             .select(`tanggal, status, siswa (nama, nisn, kelas (nama))`)
-            .eq('id_guru', currentGuru.id)
+            .in('id_siswa', siswaIds) // Filter by Student ID
             .gte('tanggal', exportStartDate)
             .lte('tanggal', exportEndDate)
             .order('tanggal', { ascending: true })
             .order('siswa(nama)', { ascending: true });
+            
         if (error) throw error;
         return data.map(row => ({
             tanggal: row.tanggal,
@@ -836,35 +847,31 @@
       btn.disabled = true;
 
       try {
-        const siswaIds = siswaBinaan.map(s => s.id);
-        const { data: existingData } = await supabase.from('kehadiran').select('id, id_siswa').eq('tanggal', tanggalDipilih).in('id_siswa', siswaIds);
-        const existingMap = {};
-        existingData?.forEach(e => existingMap[e.id_siswa] = e.id);
-        const updates = [];
-        const inserts = [];
+        // --- UPDATE LOGIC: UPSERT (Simpan Bersamaan) ---
+        const payload = siswaBinaan.map(s => ({
+            id_siswa: s.id,
+            id_guru: currentGuru.id,
+            tanggal: tanggalDipilih,
+            status: document.getElementById(`status-${s.id}`).value
+        }));
 
-        siswaBinaan.forEach(s => {
-          const status = document.getElementById(`status-${s.id}`).value;
-          if (existingMap[s.id]) {
-            updates.push(supabase.from('kehadiran').update({ status }).eq('id', existingMap[s.id]));
-          } else {
-            inserts.push({ id_siswa: s.id, id_guru: currentGuru.id, tanggal: tanggalDipilih, status: status });
-          }
-        });
+        const { error } = await supabase
+            .from('kehadiran')
+            .upsert(payload, { onConflict: 'id_siswa,tanggal' });
 
-        if (updates.length > 0) await Promise.all(updates);
-        if (inserts.length > 0) await supabase.from('kehadiran').insert(inserts);
+        if (error) throw error;
 
         sendLocalNotification(
             "Kehadiran Disimpan", 
             `Guru ${currentGuru.nama} telah menyimpan kehadiran untuk tanggal ${tanggalDipilih}.`
         );
 
-        if (isEditMode || updates.length > 0) {
+        if (isEditMode) {
           showToast("Data kehadiran berhasil diperbarui", "success");
         } else {
           showToast("Data kehadiran berhasil disimpan", "success");
         }
+        await loadSiswaList(); // Refresh UI State
       } catch (err) {
         console.error(err);
         showToast("❌ Gagal menyimpan: " + err.message, "error");
@@ -885,7 +892,14 @@
       btn.disabled = true;
 
       try {
-        const { error } = await supabase.from('kehadiran').delete().eq('id_guru', currentGuru.id).eq('tanggal', tanggalDipilih);
+        // --- UPDATE LOGIC: DELETE BY SISWA (Bukan Guru) ---
+        const siswaIds = siswaBinaan.map(s => s.id);
+        const { error } = await supabase
+            .from('kehadiran')
+            .delete()
+            .in('id_siswa', siswaIds)
+            .eq('tanggal', tanggalDipilih);
+
         if (error) throw error;
         showToast("✅ Data kehadiran berhasil dihapus");
         isEditMode = false;
@@ -917,4 +931,3 @@
   </script>
 </body>
 </html>
-
